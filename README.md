@@ -1,5 +1,12 @@
 # Pack
 
+<p align="center">
+    <img src="https://img.shields.io/badge/Swift-orange.svg" alt="Swift" />
+    <a href="https://swift.org/package-manager">
+        <img src="https://img.shields.io/badge/swiftpm-compatible-brightgreen.svg?style=flat" alt="Swift Package Manager" />
+    </a>
+</p>
+
 Welcome to **Pack**, a Swift package to serialize and deserialize various data types into an external representation.
 
 Pack is similar in functionality to the built-in `Codable` protocols, however, unlike Codable, Pack is not key/value based, and as such is intend for packing and unpacking binary data for efficient storage.
