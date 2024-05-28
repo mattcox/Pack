@@ -17,6 +17,10 @@ public protocol Unpacker {
 /// ``Packer``, and can only perform either a pack or an unpack at once.
 ///
 	var isUnpacking: Bool { get }
+	
+/// The user info for storing local data associated with the current unpack.
+///
+	var userInfo: [PackUserInfoKey: Any] { get set }
 
 /// Initialize a new Packer, reading data from the provided `Data` object.
 ///

@@ -57,6 +57,10 @@ final class BinaryPackTests_packed: XCTestCase {
 		
 		try perform(inputStream)
 	}
+	
+/// A user info key that is used for testing the user info functionality.
+///
+	static let userInfoKey = PackUserInfoKey(rawValue: "TestKey")
 
 /// Custom types that conforms to packable.
 ///
@@ -72,12 +76,18 @@ final class BinaryPackTests_packed: XCTestCase {
 		}
 		
 		init(from unpacker: inout Unpacker) throws {
+			XCTAssertEqual(unpacker.userInfo[userInfoKey] as? String, "First")
+			unpacker.userInfo[userInfoKey] = "Second"
+		
 			self.intValue = try unpacker.unpack(Int.self)
 			self.stringValue = try unpacker.unpack(String.self, using: .utf8)
 			self.doubleValue = try unpacker.unpack(Double.self)
 		}
 		
 		func pack(to packer: inout Packer) throws {
+			XCTAssertEqual(packer.userInfo[userInfoKey] as? String, "First")
+			packer.userInfo[userInfoKey] = "Second"
+			
 			try packer.pack(self.intValue)
 			try packer.pack(self.stringValue, using: .utf8)
 			try packer.pack(self.doubleValue)
@@ -101,7 +111,11 @@ final class BinaryPackTests_packed: XCTestCase {
 		
 		init(from unpacker: inout Unpacker) throws {
 			self.intValue = try unpacker.unpack(Int.self)
+			
+			unpacker.userInfo[userInfoKey] = "First"
 			self.nestedValue = try unpacker.unpack(MyNestedType.self)
+			XCTAssertEqual(unpacker.userInfo[userInfoKey] as? String, "Second")
+			
 			self.doubleValue = try unpacker.unpack(Double.self)
 			self.stringValue = try unpacker.unpack(String.self, using: .utf8)
 			self.floatValue = try unpacker.unpack(Float.self)
@@ -109,7 +123,11 @@ final class BinaryPackTests_packed: XCTestCase {
 		
 		func pack(to packer: inout Packer) throws {
 			try packer.pack(self.intValue)
+			
+			packer.userInfo[userInfoKey] = "First"
 			try packer.pack(self.nestedValue)
+			XCTAssertEqual(packer.userInfo[userInfoKey] as? String, "Second")
+			
 			try packer.pack(self.doubleValue)
 			try packer.pack(self.stringValue, using: .utf8)
 			try packer.pack(self.floatValue)

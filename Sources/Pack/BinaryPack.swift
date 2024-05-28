@@ -28,6 +28,11 @@ public final class BinaryPack {
 		case unpacking
 	}
 	
+/// The user info for storing local data associated with the current pack
+/// operation.
+///
+	public var userInfo: [PackUserInfoKey: Any] = [:]
+	
 /// The options used to initialize the BinaryPack object.
 ///
 	public let options: Options
