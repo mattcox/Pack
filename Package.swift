@@ -1,4 +1,4 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 6.0
 
 import PackageDescription
 
@@ -12,7 +12,7 @@ let package = Package(
 		.library(name: "Pack", targets: ["Pack"]),
 	],
 	targets: [
-		.target(name: "Pack"),
-		.testTarget(name: "PackTests", dependencies: ["Pack"]),
+		.target(name: "Pack", swiftSettings: [.swiftLanguageMode(.v6)]),
+		.testTarget(name: "PackTests", dependencies: ["Pack"], swiftSettings: [.swiftLanguageMode(.v6)]),
 	]
 )

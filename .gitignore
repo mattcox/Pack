@@ -2,3 +2,4 @@
 *.xcuserstate
 *.resolved
 .swiftpm
+.build

@@ -7,11 +7,11 @@
 //
 
 extension Int8: Packed {
-	public init(from unpacker: inout Unpacker) throws {
+	public init(from unpacker: inout some Unpacker) throws {
 		self = try unpacker.unpack(Int8.self)
 	}
-	
-	public func pack(to packer: inout Packer) throws {
+
+	public func pack(to packer: inout some Packer) throws {
 		try packer.pack(self)
 	}
 }

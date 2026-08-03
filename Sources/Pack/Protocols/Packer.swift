@@ -8,204 +8,104 @@
 
 import Foundation
 
-/// A type that can pack various types into an external representation.
+/// A type that can pack values into an external representation.
+///
+/// The requirements below are the whole of what a packer must implement: how
+/// to accept bytes, how to reserve and later fill a fixed-width slot, and what
+/// layout rules it applies. Everything a caller actually uses - packing
+/// integers, strings, collections, and ``Packable`` types, and framing spans
+/// with ``withLengthPrefix(_:_:)`` - is built on top of these in extensions,
+/// defined once and shared by every packer.
+///
+/// That split is deliberate. It keeps conformance small, it means the encoding
+/// rules exist in exactly one place rather than once per packer, and it keeps
+/// the required surface non-generic so ``AnyPacker`` can forward it.
+///
+/// Note that conformance does not require any particular initializer. A packer
+/// is free to be constructed however suits it, which is what allows packers
+/// that have no byte destination at all, such as ``MeasuringPacker``.
 ///
 public protocol Packer {
-/// Get a `Data` object containing the packed data.
+/// The layout rules this packer applies.
 ///
-/// - Throws: ``PackError`` if the packer is writing to an `OutputStream`.
-///
-	var data: Data { get throws }
-	
-/// Indicates if the packer is currently packing.
-///
-/// This is useful in cases where an object acts as both a Packer and an
-/// ``Unpacker``, and can only perform either a pack or an unpack at once.
-///
-	var isPacking: Bool { get }
-	
+	var configuration: PackConfiguration { get }
+
 /// The user info for storing local data associated with the current pack.
 ///
-	var userInfo: [PackUserInfoKey: Any] { get set }
+	var userInfo: [PackUserInfoKey: any Sendable] { get set }
 
-/// Initialize a new Packer, writing to a `Data` object owned by the packer.
+/// How many bytes have been packed so far.
 ///
-	init()
+/// This is what makes a length computable - the difference between the
+/// value before and after packing a body.
+///
+/// The count is logical. It advances past reserved slots and past the body
+/// of a span that is still being buffered, so it means the same thing
+/// whether or not the underlying destination can be patched.
+///
+	var packedCount: Int { get }
 
-/// Initialize a new Packer, writing to the provided `OutputStream`.
+/// Whether reserved slots are patched directly into output already written.
 ///
-/// - Parameters:
-///   - stream: The stream to pack the data into.
+/// When `false`, the packer buffers the body of a reserved span in memory
+/// until the slot is filled, because the output it would need to patch has
+/// already been handed off - to a stream, typically.
 ///
-	init(writingTo stream: OutputStream)
-	
-/// Pack a `Bool` type value into the packer.
+/// The packed bytes are identical either way, and so is the behaviour -
+/// including the order in which reserved slots may be filled. This reports a
+/// difference in peak memory only, and is not a capability a caller needs to
+/// branch on.
 ///
-/// - Parameters:
-///   - value: The `Bool` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Bool) throws
-	
-/// Pack a `Double` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `Double` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Double) throws
-	
-/// Pack a `Float` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `Float` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Float) throws
-	
-/// Pack a `Int` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `Int` to pack.
-///
-/// - Warning: Care should be taken when packing a `Int` type value, as the
-/// size of the type varies depending on the system architecture. If the
-/// data is packed on a platform supporting 32 bit architecture, then it
-/// will be incompatible with a 64-bit architecture, and vice-versa. For
-/// maximum compatibility, use one of the explicitly sized integer types
-/// such as `Int32` or `Int64`.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Int) throws
-	
-/// Pack an `Int8` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `Int8` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Int8) throws
+	var patchesInPlace: Bool { get }
 
-/// Pack an `Int16` type value into the packer.
+/// Whether any reserved slot has yet to be filled.
 ///
-/// - Parameters:
-///   - value: The `Int16` to pack.
+/// Packed output is complete only when this is `false`. Prefer calling
+/// ``finish()``, which reports an incomplete state as an error rather than
+/// leaving it to be noticed.
 ///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Int16) throws
+	var hasOpenPlaceholders: Bool { get }
 
-/// Pack an `Int32` type value into the packer.
+/// Pack raw bytes into the packer, exactly as given.
+///
+/// This is the primitive every other packing operation is built from. The
+/// bytes are not reordered, framed, or interpreted.
 ///
 /// - Parameters:
-///   - value: The `Int32` to pack.
+///   - bytes: The bytes to pack.
 ///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
+/// - Throws: ``PackError`` if the destination could not accept the bytes.
 ///
-	mutating func pack(_ value: Int32) throws
-	
-/// Pack an `Int64` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `Int64` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: Int64) throws
+	mutating func write(_ bytes: UnsafeRawBufferPointer) throws
 
-/// Pack a `UInt` type value into the packer.
+/// Reserve a fixed number of bytes to be filled in later.
+///
+/// Use this where a value must appear before the thing that determines it -
+/// a length ahead of the body it measures, most commonly. Reserved bytes
+/// count towards ``packedCount`` immediately.
+///
+/// Prefer ``withLengthPrefix(_:_:)``, which reserves and fills a length
+/// correctly, over calling this directly.
 ///
 /// - Parameters:
-///   - value: The `UInt` to pack.
+///   - byteCount: The number of bytes to reserve.
 ///
-/// - Warning: Care should be taken when packing a `UInt` type value, as the
-/// size of the type varies depending on the system architecture. If the
-/// data is packed on a platform supporting 32 bit architecture, then it
-/// will be incompatible with a 64-bit architecture, and vice-versa. For
-/// maximum compatibility, use one of the explicitly sized integer types
-/// such as `UInt32` or `UInt64`.
+/// - Returns: A placeholder identifying the reserved bytes.
 ///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
+/// - Throws: ``PackError`` if the bytes could not be reserved.
 ///
-	mutating func pack(_ value: UInt) throws
+	mutating func reserve(byteCount: Int) throws -> PackerPlaceholder
 
-/// Pack a `UInt8` type value into the packer.
+/// Fill bytes previously reserved.
 ///
 /// - Parameters:
-///   - value: The `UInt8` to pack.
+///   - placeholder: The placeholder identifying the reserved bytes.
+///   - bytes: The bytes to write into the reserved slot. The count must
+///   match the reserved width exactly.
 ///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
+/// - Throws: ``PackError`` if the placeholder was not vended by this packer,
+/// has already been filled, is being filled out of order, or if the byte
+/// count does not match the width reserved.
 ///
-	mutating func pack(_ value: UInt8) throws
-
-/// Pack a `UInt16` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `UInt16` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: UInt16) throws
-
-/// Pack a `UInt32` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `UInt32` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: UInt32) throws
-
-/// Pack a `UInt64` type value into the packer.
-///
-/// - Parameters:
-///   - value: The `UInt64` to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: UInt64) throws
-
-/// Pack a `String` type value into the packer, with a specified encoding.
-///
-/// - Parameters:
-///   - value: The `String` to pack.
-///   - encoding: The string encoding used to encode the characters in the
-///   string into memory.
-///
-/// - Warning: Care should be taken when packing a `String`, to ensure the
-/// Encoding of the string will not change. For example, packing a string
-/// using `ascii` will store characters in 8 bits, whereas packing the
-/// string as `utf32` may result in up to 32 bits per character. To ensure
-/// packed strings can always be unpacked, a consistent encoding should be
-/// used.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ value: String, using encoding: String.Encoding) throws
-	
-/// Pack bytes stored in a `Data` object into the packer.
-///
-/// - Parameters:
-///   - value: The `Data` object containing the bytes to pack.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ data: Data) throws
-
-/// Pack a type conforming to ``Packable`` into the packer.
-///
-/// Types can conform to the ``Packable`` protocol, allowing the type
-/// itself to describe how its data should be packed.
-///
-/// - Parameters:
-///   - packable: The type conforming to ``Packable`` that should be packed.
-///
-/// - Throws: ``PackError`` if the packer is currently not packing values.
-///
-	mutating func pack(_ packable: Packable) throws
+	mutating func fill(_ placeholder: PackerPlaceholder, with bytes: UnsafeRawBufferPointer) throws
 }

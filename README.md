@@ -7,55 +7,43 @@
     </a>
 </p>
 
-Welcome to **Pack**, a Swift package to serialize and deserialize various data types into an external representation.
+Welcome to **Pack**, a Swift package to serialize and deserialize values into an external binary representation.
 
-Pack is similar in functionality to the built-in `Codable` protocols, however, unlike Codable, Pack is not key/value based, and as such is intend for packing and unpacking binary data for efficient storage.
+Pack is similar in purpose to the built-in `Codable` protocols, but unlike `Codable` it is not key/value based. The layout of the bytes is described by the code that writes them, and that layout *is* the format — which makes Pack suited to reading and writing binary file formats, and to storing data compactly.
+
+Every decision that affects the bytes on disk is made explicitly: the byte order, the width of every integer, and the encoding and framing of every string. None of it is inherited from the machine the code happens to be running on.
 
 ## Usage
 
 ### Basic packing and unpacking
-To serialize some data, a `Packer` is used to pack data into a Swift `Data` object. The `BinaryPack` object conforms to `Packer` and `Unpacker`, and encodes Swift primitive types.
+
+A `Packer` writes values into an external representation. `BinaryPacker` is the built-in packer for Swift's primitive types.
 
 ```swift
-// Initialize a new Packer
-let packer = BinaryPack()
+var packer = BinaryPacker(configuration: .littleEndian)
 
-// Pack an Integer
-try packer.pack(12345)
-
-// Pack a Double
+try packer.pack(Int64(12345))
 try packer.pack(6789.0)
-
-// Pack a String with utf8 encoding
 try packer.pack("Hello, world!", using: .utf8)
+
+let data = packer.data
 ```
 
-The data serialized by the Packer can be read as a Swift `Data` object.
+Reading back uses a `BinaryUnpacker` with the same configuration.
 
 ```swift
-let packedData = packer.data
-```
+var unpacker = BinaryUnpacker(from: data, configuration: .littleEndian)
 
-Data can also be decoded using an `Unpacker`.
-
-```swift
-// Initialize a new Unpacker, and specify the data that should be unpacked
-let unpacker = BinaryPack(from: data)
-
-// Unpack an Integer
-let int = try unpacker.unpack(Int.self)
-
-// Unpack an Double
+let int = try unpacker.unpack(Int64.self)
 let double = try unpacker.unpack(Double.self)
-
-// Unpack an String that was packed with utf8 encoding
 let string = try unpacker.unpack(String.self, using: .utf8)
 ```
 
-### Extending types to be Packable and Unpackable
-Any type can conform to `Packable`, allowing it to be serialized. The type can also conform to `Unpackable` allowing to be deserialized. A type that conforms to `Packed`, is shorthand for `Packable` and `Unpackable`, and must conform to both.
+A configuration has no default byte order — you name one, or you do not get a packer. There is no process-wide state that could change how a file is written.
 
-For example, consider the following structure representing a named color.
+### Extending types to be Packable and Unpackable
+
+Any type can conform to `Packable` to describe how it is serialized, and `Unpackable` to describe how it is read back. `Packed` is shorthand for both.
 
 ```swift
 struct Color {
@@ -65,30 +53,18 @@ struct Color {
     var blue: Double
     var alpha: Double = 1.0
 }
-```
 
-To allow this struct to be serialized using a `Packer`, it must add conformance to `Packable`.
-
-```swift
-extension Color: Packable {
-    func pack(to packer: inout Packer) throws {
-        try packer.pack(name, using: .utf16)
+extension Color: Packed {
+    func pack(to packer: inout some Packer) throws {
+        try packer.pack(name, using: .utf16, framing: .lengthPrefixed(.uint32))
         try packer.pack(red)
         try packer.pack(green)
         try packer.pack(blue)
         try packer.pack(alpha)
     }
-}
-```
 
-The `pack(to:)` functions provides a Packer as an _inout_ variable, and the function is expected to call functions on the Packer to serialize its member variables.
-
-To allow this struct to be deserialized using a `Unpacker`, it must add conformance to `Unpackable`.
-
-```swift
-extension Color: Unpackable {
-    init(from unpacker: inout Unpacker) throws {
-        self.name = try unpacker.unpack(String.self, using: .utf16)
+    init(from unpacker: inout some Unpacker) throws {
+        self.name = try unpacker.unpack(String.self, using: .utf16, framing: .lengthPrefixed(.uint32))
         self.red = try unpacker.unpack(Double.self)
         self.green = try unpacker.unpack(Double.self)
         self.blue = try unpacker.unpack(Double.self)
@@ -97,41 +73,83 @@ extension Color: Unpackable {
 }
 ```
 
-The `init(from:)` initializer provides an Unpacker as an inout variable, and the function is expected to call functions on the Packer to deserialize its member variables.
+The packer is a generic parameter rather than an existential, so packing a value compiles down to direct calls on the concrete packer instead of dispatching dynamically for every field. Where the packer's type genuinely cannot be known — dispatching through a class-bound existential, or calling a closure captured before any packer existed — wrap it in `AnyPacker`, which is a concrete type and so satisfies the generic parameter.
 
-### Reading and Writing from a Stream
-Pack provides support for serialization and deserialization of a stream, for example writing to memory, or directly to a file.
+### Framing
+
+A format usually needs to record how long something is before it has been written. `withLengthPrefix` reserves the length, packs the body, then fills the length in.
 
 ```swift
-if let outputSteam = OutputStream(toFileAtPath: myFilePath, append: false) {
-    let packer = BinaryPack(writingTo: outputStream)
+try packer.pack("MESH", using: .ascii, framing: .fixed(byteCount: 4))
+try packer.withLengthPrefix(.uint64) { packer in
+    try packer.pack(mesh)
+}
+```
+
+This produces the same bytes whatever the destination. A packer writing to memory patches the length in place; a packer writing to a stream, which cannot revise output it has already handed over, buffers the body until the length is known. Both paths run the same encoding code, so the file does not depend on how it was written.
+
+Reading back, `withLimit` bounds a span. Reads are checked against the limit as they happen, so a length that does not match its contents is reported rather than allowed to run on into whatever follows. Anything in the span that was not read is skipped, which is what lets an older reader accept a span that a newer writer has added fields to.
+
+```swift
+let length = try unpacker.unpack(UInt64.self)
+
+try unpacker.withLimit(byteCount: Int(length)) { unpacker in
+    // read the fields this version knows about; the rest is skipped
+}
+```
+
+### Strings
+
+How a string records its extent is chosen per field, because one format routinely mixes several — a fixed-size tag, a length-prefixed name, a null-terminated path.
+
+```swift
+try packer.pack(tag,  using: .ascii, framing: .fixed(byteCount: 4))
+try packer.pack(name, using: .utf8,  framing: .lengthPrefixed(.uint32))
+try packer.pack(path, using: .utf8,  framing: .nullTerminated)
+```
+
+The configuration supplies a default so the common case stays short.
+
+### Collections
+
+Arrays of scalars pack in a single pass, and reduce to a bulk copy when no reordering is needed.
+
+```swift
+try packer.pack(contentsOf: vertices)
+try packer.pack(contentsOf: indices, countPrefixedBy: .uint32)
+```
+
+### Reading and writing streams
+
+Pack can serialize directly to an `OutputStream`, or read from an `InputStream`.
+
+```swift
+if let outputStream = OutputStream(toFileAtPath: myFilePath, append: false) {
+    outputStream.open()
+    var packer = BinaryPacker(writingTo: outputStream, configuration: .littleEndian)
     try packer.pack("Hello, World!", using: .ascii)
 }
 ```
 
-Data can also be deserialized from an `InputStream`.
-
 ```swift
 if let inputStream = InputStream(fileAtPath: myFilePath) {
-    let unpacker = BinaryPack(readingFrom: inputStream)
-    try unpacker.unpack(String.self, using: .ascii)
+    inputStream.open()
+    var unpacker = BinaryUnpacker(readingFrom: inputStream, configuration: .littleEndian)
+    let string = try unpacker.unpack(String.self, using: .ascii)
 }
 ```
 
-### BinaryPack Options
-**BinaryPack** is the standard packer for serializing and deserializing Swift built-in types as binary data. By default, it writes the string byte size before the string data, ensuring it can easily be read back in.
-
-This behaviour can be modified using options when initializing the BinaryPack object.
-
-For example, to read or write a null terminator after strings, the following options can be set.
-
-```swift
-let binaryPack = BinaryPack(options: [.stringsNullTerminated])
-```
+Other destinations and sources — a memory mapped file, a socket, a compressing sink — are a four-method conformance to `PackDestination` or `UnpackSource`, and need no changes to the encoding.
 
 ## Limitations
 
-As Pack is intended for serializing and deserializing raw binary data, the layout of packed data is important. As such, beyond primitive built-in value types, such as `Int`, `Double`, `String`...etc, Pack provides no support for packing or unpacking complex Swift built-in types. As such, adding Pack protocol conformance to more complex built-in types is left to the end user, allowing them to ensure the data is written out in a stable format that matches the use case.
+Pack is intended for serializing raw binary data, so the layout of packed data matters. Beyond the primitive built-in types, Pack provides no automatic conformance for complex Swift types — adding it is left to the caller, so that the data is written in a stable format matching the use case.
+
+`Int` and `UInt` change width between platforms, so a file written with them is readable only on a machine of matching width — and would not fail on the machine it was tested on. Pack's integer APIs are constrained to `PortableInteger`, which `Int` and `UInt` deliberately do not conform to, so using one is a compile error rather than a corrupt file discovered later. Widen explicitly:
+
+```swift
+try packer.pack(Int64(value))
+```
 
 ## Installation
 
@@ -153,3 +171,5 @@ Import Pack wherever you’d like to use it:
 ```swift
 import Pack
 ```
+
+Pack requires a Swift 6 toolchain, and builds in Swift 6 language mode.
