@@ -24,10 +24,12 @@ jobs:
       # Must be set to this for deploying to GitHub Pages
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: macos-12
+    # Pack requires a Swift 6 toolchain, which is not available on older
+    # runner images.
+    runs-on: macos-15
     steps:
       - name: Checkout 🛎️
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Publish Documentation
         run: |
           xcodebuild docbuild -scheme Pack \
@@ -39,10 +41,10 @@ jobs:
             --output-path docs;
           echo "<script>window.location.href += \"/documentation/pack\"</script>" > docs/index.html;
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           # Upload only docs directory
           path: 'docs'
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v4

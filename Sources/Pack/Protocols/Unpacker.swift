@@ -8,261 +8,86 @@
 
 import Foundation
 
-/// A type that can unpack various types from an external representation.
+/// A type that can unpack values from an external representation.
+///
+/// As with ``Packer``, the requirements here are a small non-generic core -
+/// reading bytes, skipping bytes, and bounding a span - and everything a
+/// caller uses is built on top in extensions.
 ///
 public protocol Unpacker {
-/// Indicates if the unpacker is currently unpacking.
+/// The layout rules this unpacker applies.
 ///
-/// This is useful in cases where an object acts as both an Unpacker and a
-/// ``Packer``, and can only perform either a pack or an unpack at once.
-///
-	var isUnpacking: Bool { get }
-	
+	var configuration: PackConfiguration { get }
+
 /// The user info for storing local data associated with the current unpack.
 ///
-	var userInfo: [PackUserInfoKey: Any] { get set }
+	var userInfo: [PackUserInfoKey: any Sendable] { get set }
 
-/// Initialize a new Packer, reading data from the provided `Data` object.
+/// How many bytes have been consumed so far.
 ///
-/// - Parameters:
-///   - data: The `Data` object to unpack data from.
+/// This makes a span's declared length checkable: a body that consumed more
+/// than its header declared indicates a corrupt file.
 ///
-	init(from data: Data)
+	var unpackedCount: Int { get }
 
-/// Initialize a new Packer, reading from the provided `InputStream`.
+/// How many bytes remain available to read, or `nil` where that cannot be
+/// known.
 ///
-/// - Parameters:
-///   - stream: The stream to unpack data from.
+/// Within a limited span this reports the remainder of the span rather than
+/// the remainder of the source. It is `nil` for a source of indeterminate
+/// length, such as a stream, when no limit is in effect.
 ///
-	init(readingFrom stream: InputStream)
-	
-/// Offset the current read index by the specified amount in bytes.
-///
-/// This can be useful for skipping over certain blocks of data.
-///
-/// - Parameters:
-///   - count: The amount to offset the read index in bytes. For example, a
-///   value of 1 would offset 8 bits forward.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func offset(by count: UInt) throws
+	var remainingCount: Int? { get }
 
-/// Unpack a `Bool` type value from the data source.
+/// Unpack raw bytes from the source, filling the given buffer.
+///
+/// This is the primitive every other unpacking operation is built from. The
+/// bytes are not reordered or interpreted.
 ///
 /// - Parameters:
-///   - type: The type of object to unpack.
+///   - buffer: The buffer to read into. It is filled completely, or the
+///   call throws.
 ///
-/// - Returns: A `Bool` value unpacked from the data source.
+/// - Throws: ``PackError`` if the source is exhausted, or if the read would
+/// pass the end of the innermost limited span.
 ///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Bool.Type) throws -> Bool
+	mutating func read(into buffer: UnsafeMutableRawBufferPointer) throws
 
-/// Unpack a `Double` type value from the data source.
+/// Skip forward by the specified number of bytes.
 ///
 /// - Parameters:
-///   - type: The type of object to unpack.
+///   - byteCount: The number of bytes to skip.
 ///
-/// - Returns: A `Double` value unpacked from the data source.
+/// - Throws: ``PackError`` if the source is exhausted, or if the skip would
+/// pass the end of the innermost limited span.
 ///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Double.Type) throws -> Double
+	mutating func skip(_ byteCount: Int) throws
 
-/// Unpack a `Float` type value from the data source.
+/// Bound subsequent reads to a span of the given length.
+///
+/// Reads are checked against the limit as they happen, so a corrupt length
+/// cannot be used to read on into whatever follows the span.
+///
+/// Prefer ``withLimit(byteCount:_:)`` over calling this directly.
 ///
 /// - Parameters:
-///   - type: The type of object to unpack.
+///   - byteCount: The length of the span, measured from the current
+///   position.
 ///
-/// - Returns: A `Float` value unpacked from the data source.
+/// - Throws: ``PackError`` if the span would extend beyond an enclosing
+/// limit, or beyond the end of a source whose length is known.
 ///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Float.Type) throws -> Float
+	mutating func pushLimit(byteCount: Int) throws
 
-/// Unpack a `Int` type value from the data source.
+/// Remove the innermost limit.
 ///
 /// - Parameters:
-///   - type: The type of object to unpack.
+///   - skippingRemainder: Whether to advance to the end of the span before
+///   removing the limit. This is what allows a reader to accept a span
+///   containing fields it does not recognise.
 ///
-/// - Warning: Care should be taken when unpacking an `Int` type value, as
-/// the size of the type varies depending on the system architecture. If the
-/// data is packed on a platform supporting 32 bit architecture, then it
-/// will be incompatible with a 64-bit architecture, and vice-versa. For
-/// maximum compatibility, use one of the explicitly sized integer types
-/// such as `Int32` or `Int64`.
+/// - Throws: ``PackError`` if there is no limit in effect, or if the
+/// remainder could not be skipped.
 ///
-/// - Returns: A `Int` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Int.Type) throws -> Int
-
-/// Unpack a `Int8` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `Int8` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Int8.Type) throws -> Int8
-
-/// Unpack a `Int16` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `Int16` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Int16.Type) throws -> Int16
-
-/// Unpack a `Int32` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `Int32` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Int32.Type) throws -> Int32
-
-/// Unpack a `Int64` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `Int64` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Int64.Type) throws -> Int64
-
-/// Unpack a `UInt` type value from the data source.
-///
-/// - Warning: Care should be taken when unpacking an `UInt` type value, as
-/// the size of the type varies depending on the system architecture. If the
-/// data is packed on a platform supporting 32 bit architecture, then it
-/// will be incompatible with a 64-bit architecture, and vice-versa. For
-/// maximum compatibility, use one of the explicitly sized integer types
-/// such as `UInt32` or `UInt64`.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `UInt` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: UInt.Type) throws -> UInt
-
-/// Unpack a `UInt8` type value from the data source.c
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `UInt8` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: UInt8.Type) throws -> UInt8
-
-/// Unpack a `UInt16` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `UInt16` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: UInt16.Type) throws -> UInt16
-
-/// Unpack a `UInt32` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `UInt32` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: UInt32.Type) throws -> UInt32
-
-/// Unpack a `UInt64` type value from the data source.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: A `UInt64` value unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: UInt64.Type) throws -> UInt64
-
-/// Unpack a `String` type value from the data source, packed with the
-/// specified encoding.
-///
-/// - Warning: Care should be taken when unpacking a `String`, to ensure the
-/// Encoding of the string is the same as when it was packed. For example,
-/// packing a string using `ascii` will store characters in 8 bits, whereas
-/// packing the string as `utf32` may result in up to 32 bits per character.
-/// To ensure packed strings can always be unpacked, a consistent encoding
-/// should be used.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///   - encoding: The string encoding that the string was encoded with when
-///   packing.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: String.Type, using encoding: String.Encoding) throws -> String
-
-/// Unpack bytes from the data source, without interpreting the data as a
-/// specific type. The number of bytes to read can be specified.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///   - size: The number of bytes to read from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack(_ type: Data.Type, size: Int) throws -> Data
-
-/// Unpack a type conforming to ``Unpackable`` from the data source.
-///
-/// Types can conform to the ``Unpackable`` protocol, allowing the type
-/// itself to describe how its data should be unpacked.
-///
-/// - Parameters:
-///   - type: The type of object to unpack.
-///
-/// - Returns: The ``Unpackable`` type unpacked from the data source.
-///
-/// - Throws: ``PackError`` if the unpacker is currently not unpacking
-/// values, or if the end of the input source is reached.
-///
-	mutating func unpack<T: Unpackable>(_ type: T.Type) throws -> T
+	mutating func popLimit(skippingRemainder: Bool) throws
 }

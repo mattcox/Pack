@@ -7,11 +7,11 @@
 //
 
 extension String: Packed {
-	public init(from unpacker: inout Unpacker) throws {
-		self = try unpacker.unpack(String.self, using: .utf8)
+	public init(from unpacker: inout some Unpacker) throws {
+		self = try unpacker.unpack(String.self)
 	}
-	
-	public func pack(to packer: inout Packer) throws {
-		try packer.pack(self, using: .utf8)
+
+	public func pack(to packer: inout some Packer) throws {
+		try packer.pack(self)
 	}
 }
